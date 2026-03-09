@@ -17,9 +17,11 @@ Technical Highlights
   <li>Vortex Lattice Method aerodynamics with spanwise and chordwise panel discretization across all lifting surfaces simultaneously</li>
   <li>FLOPS-compatible weight estimation inputs: accessories, hydraulics, avionics, APU, life support, and control system classifications</li>
   <li>OpenVSP geometry export for external mesh generation</li>
+  <li>OpenVSP Comp Geom for wetted area calculations</li>
 </ul>
 
 Performance plots can be found in <a src="C-17 Plots">C-17 Plots</a> folder
+
 Flight plan: takeoff roll, climb to 10,000ft, climb to 28,000ft, cruise 1,000nmi, descend to 10,000ft, slow to airdrop speed, payload drop, climb back to 28,000ft, cruise 500nmi return, descend to landing
 
 Measurements derived from Air Force manuals, case study presentations, simulation manuals
