@@ -1,0 +1,51 @@
+...Comp Geom...
+8 Num Comps
+10 Total Num Meshes
+22488 Total Num Tris
+
+Theo_Area   Wet_Area   Theo_Vol    Wet_Vol  Name
+  409.312    349.862    130.826    116.180  main_wing      
+  409.312    349.862    130.826    116.180  main_wing      
+  127.006    119.658     45.349     44.389  vertical_stabilizer
+   83.443     77.681     16.490     15.949  horizontal_stabilizer
+   83.443     77.681     16.490     15.949  horizontal_stabilizer
+   90.670     90.670     15.209     15.209  nacelle_       
+   90.670     90.670     15.209     15.209  nacelle_2      
+   90.670     90.670     15.209     15.209  nacelle_3      
+   90.670     90.670     15.209     15.209  nacelle_4      
+  838.174    788.955   1234.630   1207.388  fuselage       
+-------------------------------------------------
+ 2313.372   2126.380   1635.447   1576.870  Totals         
+
+Tag_Theo_Area   Tag_Wet_Area    Tag_Name
+      310.255        250.805    main_wing_S_Surf0
+      310.255        250.805    main_wing_S_Surf1
+      104.283         96.934    vertical_stabilizer_S_Surf0
+       58.503         52.740    horizontal_stabilizer_S_Surf0
+       58.503         52.740    horizontal_stabilizer_S_Surf1
+       90.670         90.670    nacelle__S_Surf0
+       90.670         90.670    nacelle_2_S_Surf0
+       90.670         90.670    nacelle_3_S_Surf0
+       90.670         90.670    nacelle_4_S_Surf0
+      838.174        788.955    fuselage_S_Surf0
+        0.883          0.883    main_wing_S_Surf0,SS_CONT_0
+       16.827         16.827    main_wing_S_Surf0,SS_CONT_1
+       29.453         29.453    main_wing_S_Surf0,SS_CONT_2
+        8.240          8.240    main_wing_S_Surf0,SS_CONT_3
+        0.883          0.883    main_wing_S_Surf1,SS_CONT_0
+       16.827         16.827    main_wing_S_Surf1,SS_CONT_1
+       29.453         29.453    main_wing_S_Surf1,SS_CONT_2
+        8.240          8.240    main_wing_S_Surf1,SS_CONT_3
+       22.724         22.724    vertical_stabilizer_S_Surf0,SS_CONT_0
+       24.940         24.940    horizontal_stabilizer_S_Surf0,SS_CONT_0
+       24.940         24.940    horizontal_stabilizer_S_Surf1,SS_CONT_0
+       43.654         43.654    main_wing_S_Surf0,SS_CONT_0,SS_CONT_2
+       43.654         43.654    main_wing_S_Surf1,SS_CONT_0,SS_CONT_2
+
+ SS_Theo_Area    SS_Wet_Area    SS_Name
+       89.074         89.074    main_wing,SS_CONT_0
+       33.654         33.654    main_wing,SS_CONT_1
+      146.216        146.216    main_wing,SS_CONT_2
+       16.480         16.480    main_wing,SS_CONT_3
+       22.724         22.724    vertical_stabilizer,SS_CONT_0
+       49.880         49.880    horizontal_stabilizer,SS_CONT_0
