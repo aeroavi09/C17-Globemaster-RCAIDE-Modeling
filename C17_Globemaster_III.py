@@ -1,4 +1,4 @@
-#NASA Helios RCAIDE migration
+#Boeing C-17 Globemaster III migration
 
 import RCAIDE
 print("RCAIDE version: " + RCAIDE.__version__)
@@ -1102,5 +1102,6 @@ def plot_mission(results):
     #find the rcaide outputs needed for you
     
     return 
+
 
 main()
