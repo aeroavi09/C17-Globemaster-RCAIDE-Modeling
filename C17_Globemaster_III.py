@@ -12,6 +12,10 @@ import matplotlib.pyplot as plt
 import os
 from pathlib import Path
 import sys
+
+# run from this script's folder so ./Airfoils/... and the .vsp3 export resolve no matter where it's launched from
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
 sys.path.insert(0,(os.path.dirname(os.getcwd())))
 
 print(sys.path.insert(0,(os.path.dirname(os.getcwd()))))
@@ -92,12 +96,13 @@ def vehicle_setup():
     
     #this is the fuel and mass stuff
     vehicle.reference_area                                  = 3800 * Units.feet**2
+    # weights from the C17 Manual / DeltaSim C-17 flight manual spec tables
     vehicle.mass_properties.max_takeoff                     = 585000* Units.pounds
-    vehicle.mass_properties.takeoff                         = 586000* Units.pounds
     vehicle.mass_properties.operating_empty                 = 282500* Units.pounds
-    vehicle.mass_properties.max_zero_fuel                   = 282500 * Units.pounds
+    vehicle.mass_properties.max_zero_fuel                   = 447400 * Units.pounds  # DeltaSim ZFW (282,500 is the operating weight)
     #vehicle.mass_properties.max_fuel                       = (180000+282500) * Units.pounds
-    vehicle.mass_properties.cargo                           = 10000  * Units.pounds #170900lb max for c17
+    vehicle.mass_properties.cargo                           = 10000  * Units.kg      # airdrop payload (170900lb max for c17)
+    # takeoff mass = operating empty + cargo + fuel, set at the end of vehicle_setup once the fuel tank exists
     vehicle.mass_properties.center_of_gravity               = [[65 * Units.feet,0, -1 * Units.feet, 0]]
     vehicle.passengers                                      = 134
 
@@ -239,7 +244,7 @@ def vehicle_setup():
     spoiler.tag                                             = 'spoiler'
     spoiler.span_fraction_start                             = 12.*2/169.83
     spoiler.span_fraction_end                               = 59.69*2/169.83
-    spoiler.deflection                                      = 50 * Units.degrees
+    spoiler.deflection                                      = 0 * Units.degrees     # stowed in flight; only the reverse_thrust (rollout) config deploys them
     spoiler.chord_fraction                                  = 0.17857142857
     wing.append_control_surface(spoiler)
     
@@ -255,7 +260,7 @@ def vehicle_setup():
     flap.tag                                                = 'flap'
     flap.span_fraction_start                                = 12.7*2/169.83
     flap.span_fraction_end                                  = 59.69*2/169.83
-    flap.deflection                                         = 50 * Units.degrees
+    flap.deflection                                         = 0 * Units.degrees     # clean wing; takeoff/landing/etc. configs set their own flap angle
     flap.configuration_type                                 = 'multi_slotted'
     flap.chord_fraction                                     = 0.30
     wing.append_control_surface(flap)
@@ -401,7 +406,7 @@ def vehicle_setup():
     fuselage.heights.maximum                                = 10.296*2 * Units.feet
     fuselage.width                                          = 28.886 * Units.feet
     fuselage.effective_diameter                             = 10.794 * Units.feet   # this becomes radius_outer
-    fuselage.areas.wetted                                   = 20000 * Units.feet**2
+    fuselage.areas.wetted                                   = 8972 * Units.feet**2  # integrated from the segment cross-sections below (was 20000, ~2.2x too high)
     fuselage.heights.at_quarter_length                      = 8.3655 * Units.meter
     fuselage.heights.at_three_quarters_length               = 10.296 * Units.meter
     fuselage.heights.at_wing_root_quarter_chord             = 8.3655 * Units.meter
@@ -682,7 +687,7 @@ def vehicle_setup():
     fuel_tank = RCAIDE.Library.Components.Powertrain.Sources.Fuel_Tanks.Fuel_Tank()
     fuel_tank.origin                                        = vehicle.wings.main_wing.origin
     fuel_tank.fuel                                          = RCAIDE.Library.Attributes.Propellants.Jet_A1()
-    fuel_tank.fuel.mass_properties.mass                     = 137600 * Units.pounds
+    fuel_tank.fuel.mass_properties.mass                     = 35546 * Units.gallon * fuel_tank.fuel.density  # full tanks, C17 Manual fuel capacity (~108 t)
     fuel_tank.fuel.origin                                   = vehicle.wings.main_wing.mass_properties.center_of_gravity
     fuel_tank.fuel.mass_properties.center_of_gravity        = vehicle.wings.main_wing.aerodynamic_center
     fuel_tank.volume                                        = fuel_tank.fuel.mass_properties.mass/fuel_tank.fuel.density
@@ -696,7 +701,10 @@ def vehicle_setup():
     
     # Append energy network to aircraft
     vehicle.append_energy_network(net)
-    
+
+    vehicle.mass_properties.takeoff                         = (vehicle.mass_properties.operating_empty
+                                                               + vehicle.mass_properties.cargo
+                                                               + fuel_tank.fuel.mass_properties.mass)
 
     return vehicle
 
@@ -805,6 +813,17 @@ def configs_setup(vehicle):
     
     configs.append(config)
     
+    #   Airdrop Configuration
+
+    config = RCAIDE.Library.Components.Configs.Config(base_config)
+    config.tag = 'airdrop'
+
+    # Slats extended + 1/2 flaps for the slow drop run (DeltaSim limits: slats 280 KCAS, 1/2 flaps 250 KCAS)
+    config.wings['main_wing'].control_surfaces.flap.deflection  = 25. * Units.deg
+    config.wings['main_wing'].control_surfaces.slat.deflection = 25. * Units.deg
+
+    configs.append(config)
+
     #   Reverse Thrust Configuration
     
     config = RCAIDE.Library.Components.Configs.Config(base_config)
@@ -834,8 +853,35 @@ def configs_setup(vehicle):
     
     return configs
 
+def parasite_total_consistent_reference(state, settings, geometry):
+    """Same as RCAIDE's Common.Drag.parasite_total (v1.2.1), with two reference-area fixes:
+       - nacelle CD is normalized by its frontal area (pi D^2/4) in parasite_drag_nacelle, so it is rescaled by that
+         area here (the library uses pi*D*L, which over-counts nacelle drag by 4L/D ~ 7.4x for this nacelle)
+       - pylon CD is already referenced to S_ref in parasite_drag_pylon, so it is added as-is (the library rescales it again)"""
+    parasite = state.conditions.aerodynamics.coefficients.drag.parasite
+    S_ref    = geometry.reference_area
+    total    = 0.0
+    for wing in geometry.wings:
+        parasite[wing.tag].total = parasite[wing.tag].total * wing.areas.reference / S_ref
+        total += parasite[wing.tag].total
+    for fuselage in geometry.fuselages:
+        if type(fuselage) == RCAIDE.Library.Components.Fuselages.Blended_Wing_Body_Fuselage:
+            continue
+        parasite[fuselage.tag].total = parasite[fuselage.tag].total * fuselage.areas.front_projected / S_ref
+        total += parasite[fuselage.tag].total
+    for network in geometry.networks:
+        for propulsor in network.propulsors:
+            if 'nacelle' in propulsor:
+                nacelle = propulsor.nacelle
+                parasite[nacelle.tag].total = parasite[nacelle.tag].total * (np.pi * nacelle.diameter**2 / 4) / S_ref
+                total += parasite[nacelle.tag].total
+                if nacelle.has_pylon:
+                    total += parasite[nacelle.tag + '_pylon'].total
+    parasite.total = total * (1 - settings.drag_reduction_factors.parasite_drag)
+    return
+
 def base_analysis(vehicle):
-    
+
     analyses = RCAIDE.Framework.Analyses.Vehicle()
  
     #  Weights
@@ -850,7 +896,13 @@ def base_analysis(vehicle):
     aerodynamics.vehicle = vehicle 
     aerodynamics.settings.number_of_spanwise_vortices       = 10
     aerodynamics.settings.number_of_chordwise_vortices      = 2
-    analyses.append(aerodynamics)  
+    # Induced drag from an Oswald factor instead of the VLM's own CDi: with the SC(2)-0714 camber the VLM
+    # over-predicts CL0 (~1.17 vs ~0.44 thin-airfoil) and gives a large CDi offset at zero lift.
+    # Raymer, Aircraft Design: A Conceptual Approach, Eq. 12.48 (LE sweep 29.6 deg < 30 deg) -> e ~ 0.82 for AR 7.59
+    AR_main                                                 = vehicle.wings.main_wing.aspect_ratio
+    aerodynamics.settings.oswald_efficiency_factor          = 1.78 * (1 - 0.045 * AR_main**0.68) - 0.64
+    aerodynamics.process.compute.drag.parasite.total        = parasite_total_consistent_reference
+    analyses.append(aerodynamics)
  
     #  Energy
     energy= RCAIDE.Framework.Analyses.Energy.Energy()
@@ -877,31 +929,43 @@ def analyses_setup(configs):
 
     return analyses
 
-def mission_setup(analyses):   
-    
+def drop_payload_then_initialize_weights(segment):
+    """RCAIDE's stock weight initialization, then remove the airdropped cargo from this segment's mass history"""
+    RCAIDE.Library.Mission.Common.Initialize.weights(segment)
+    segment.state.conditions.weights.total_mass[:,:] -= segment.payload_drop_mass
+    return
+
+def mission_setup(analyses):
+
+    # Speeds follow the DeltaSim C-17 flight manual procedures/limits:
+    #   climb 250 KCAS to 10,000 ft, 310 KCAS above (Mach 0.74 crossover at ~25,000 ft), cruise Mach 0.76,
+    #   descent at the lowest of Mach 0.74 / 310 KCAS, 250 KCAS max below 10,000 ft
+    # Rotation (140 kt), approach/touchdown (130 kt) and airdrop (150 KCAS) are not in the data sheets [uncertain]
+    # Cruise segments take true airspeed: 250 KCAS @ 10,000 ft = 148.5 m/s TAS, 150 KCAS @ 10,000 ft = 89.5 m/s TAS
+
     mission = RCAIDE.Framework.Mission.Sequential_Segments()
-    mission.tag = 'mission' 
-    
+    mission.tag = 'mission'
+
     Segments = RCAIDE.Framework.Mission.Segments
     base_segment = Segments.Segment()
-    
+
     #takeoff
     segment = Segments.Ground.Takeoff(base_segment)
     segment.tag = "takeoff"
     segment.analyses.extend( analyses.takeoff )
     segment.velocity_start                                          = 0.* Units.knots
-    segment.velocity_end                                            = 150.0 * Units['m/s']
+    segment.velocity_end                                            = 140.0 * Units.knots   # rotation [uncertain]
     segment.friction_coefficient                                    = 0.04
     segment.altitude                                                = 0.0
     mission.append_segment(segment)
-    
-    #first climb
-    segment = Segments.Climb.Constant_Speed_Constant_Rate(base_segment)
+
+    #first climb, flaps/slats up after takeoff
+    segment = Segments.Climb.Constant_CAS_Constant_Rate(base_segment)
     segment.tag = "climb_1"
-    segment.analyses.extend( analyses.takeoff )
+    segment.analyses.extend( analyses.cruise )
     segment.altitude_start                                          = 0.0   * Units.feet
     segment.altitude_end                                            = 10000   * Units.feet
-    segment.air_speed                                               = 125.0 * Units['m/s']
+    segment.calibrated_air_speed                                    = 250.0 * Units.knots
     segment.climb_rate                                              = 6.0   * Units['m/s']
 
     segment.flight_dynamics.force_x                                 = True
@@ -912,14 +976,14 @@ def mission_setup(analyses):
     segment.assigned_control_variables.body_angle.active            = True
 
     mission.append_segment(segment)
-    
-    #second climb
-    segment = Segments.Climb.Constant_Speed_Constant_Rate(base_segment)
+
+    #second climb, 310 KCAS to the Mach 0.74 crossover
+    segment = Segments.Climb.Constant_CAS_Constant_Rate(base_segment)
     segment.tag = "climb_2"
-    segment.analyses.extend( analyses.takeoff )
+    segment.analyses.extend( analyses.cruise )
     segment.altitude_start                                          = 10000   * Units.feet
-    segment.altitude_end                                            = 28000   * Units.feet
-    segment.air_speed                                               = 230.0 * Units['m/s']
+    segment.altitude_end                                            = 25000   * Units.feet
+    segment.calibrated_air_speed                                    = 310.0 * Units.knots
     segment.climb_rate                                              = 9.0   * Units['m/s']
 
     segment.flight_dynamics.force_x                                 = True
@@ -930,83 +994,159 @@ def mission_setup(analyses):
     segment.assigned_control_variables.body_angle.active            = True
 
     mission.append_segment(segment)
-    
-    #first cruise after climbing
-    segment = Segments.Cruise.Constant_Speed_Constant_Altitude(base_segment)
-    segment.tag = "cruise_1"
+
+    #second climb continued at Mach 0.74 to cruise altitude
+    segment = Segments.Climb.Constant_Mach_Constant_Rate(base_segment)
+    segment.tag = "climb_2b"
     segment.analyses.extend( analyses.cruise )
-    segment.altitude                                                = 28000   * Units.feet
-    segment.air_speed                                               = 520 * Units['mph']
-    segment.distance                                                = 1000 * Units.nmi
-    
+    segment.altitude_start                                          = 25000   * Units.feet
+    segment.altitude_end                                            = 28000   * Units.feet
+    segment.mach_number                                             = 0.74
+    segment.climb_rate                                              = 9.0   * Units['m/s']
+
     segment.flight_dynamics.force_x                                 = True
     segment.flight_dynamics.force_z                                 = True
-    
+
     segment.assigned_control_variables.throttle.active              = True
     segment.assigned_control_variables.throttle.assigned_propulsors = [['starboard_propulsor_1', 'starboard_propulsor_2','port_propulsor_1', 'port_propulsor_2']]
     segment.assigned_control_variables.body_angle.active            = True
-    
+
     mission.append_segment(segment)
-    
-    #descent to 10000 feet
+
+    #first cruise after climbing
+    segment = Segments.Cruise.Constant_Mach_Constant_Altitude(base_segment)
+    segment.tag = "cruise_1"
+    segment.analyses.extend( analyses.cruise )
+    segment.altitude                                                = 28000   * Units.feet
+    segment.mach_number                                             = 0.76
+    segment.distance                                                = 1000 * Units.nmi
+
+    segment.flight_dynamics.force_x                                 = True
+    segment.flight_dynamics.force_z                                 = True
+
+    segment.assigned_control_variables.throttle.active              = True
+    segment.assigned_control_variables.throttle.assigned_propulsors = [['starboard_propulsor_1', 'starboard_propulsor_2','port_propulsor_1', 'port_propulsor_2']]
+    segment.assigned_control_variables.body_angle.active            = True
+
+    mission.append_segment(segment)
+
+    #descent at Mach 0.74 down to the crossover altitude
+    # (Descent.Linear_Mach_Constant_Rate evaluates the speed of sound before setting altitude in RCAIDE 1.2.1, so it
+    #  flies Mach 0.74 * sea-level a = Mach 0.82 up here; use the equivalent true airspeed instead: M 0.735-0.745)
     segment = Segments.Descent.Constant_Speed_Constant_Rate(base_segment)
     segment.tag = "descent_1"
     segment.analyses.extend( analyses.cruise )
     segment.altitude_start                                          = 28000   * Units.feet
-    segment.altitude_end                                            = 10000   * Units.feet
-    segment.air_speed                                               = 400 * Units['mph']
+    segment.altitude_end                                            = 25000   * Units.feet
+    segment.air_speed                                               = 227.8 * Units['m/s']   # Mach 0.74 at 26,500 ft
     segment.descent_rate                                            = 4.5   * Units['m/s']
-    
+
     segment.flight_dynamics.force_x                                 = True
     segment.flight_dynamics.force_z                                 = True
-    
+
     segment.assigned_control_variables.throttle.active              = True
     segment.assigned_control_variables.throttle.assigned_propulsors = [['starboard_propulsor_1', 'starboard_propulsor_2','port_propulsor_1', 'port_propulsor_2']]
     segment.assigned_control_variables.body_angle.active            = True
-    
+
     mission.append_segment(segment)
-    
-    #second cruise after descent
+
+    #descent at 310 KCAS to 10000 feet
+    segment = Segments.Descent.Constant_CAS_Constant_Rate(base_segment)
+    segment.tag = "descent_1b"
+    segment.analyses.extend( analyses.cruise )
+    segment.altitude_start                                          = 25000   * Units.feet
+    segment.altitude_end                                            = 10000   * Units.feet
+    segment.calibrated_air_speed                                    = 310 * Units.knots
+    segment.descent_rate                                            = 4.5   * Units['m/s']
+
+    segment.flight_dynamics.force_x                                 = True
+    segment.flight_dynamics.force_z                                 = True
+
+    segment.assigned_control_variables.throttle.active              = True
+    segment.assigned_control_variables.throttle.assigned_propulsors = [['starboard_propulsor_1', 'starboard_propulsor_2','port_propulsor_1', 'port_propulsor_2']]
+    segment.assigned_control_variables.body_angle.active            = True
+
+    mission.append_segment(segment)
+
+    #second cruise after descent, 250 KCAS (max below 10,000 ft)
     segment = Segments.Cruise.Constant_Speed_Constant_Altitude(base_segment)
     segment.tag = "cruise_2"
     segment.analyses.extend( analyses.cruise )
     segment.altitude                                                = 10000   * Units.feet
-    segment.air_speed                                               = 300 * Units['mph']
+    segment.air_speed                                               = 148.5 * Units['m/s']   # 250 KCAS
     segment.distance                                                = 50 * Units.nmi
-    
+
     segment.flight_dynamics.force_x                                 = True
     segment.flight_dynamics.force_z                                 = True
-    
+
     segment.assigned_control_variables.throttle.active              = True
     segment.assigned_control_variables.throttle.assigned_propulsors = [['starboard_propulsor_1', 'starboard_propulsor_2','port_propulsor_1', 'port_propulsor_2']]
     segment.assigned_control_variables.body_angle.active            = True
-    
+
     mission.append_segment(segment)
-    
-    #third cruise after descent, slow down before airdrop
+
+    #slow down to airdrop speed with slats and 1/2 flaps out
+    segment = Segments.Cruise.Constant_Acceleration_Constant_Altitude(base_segment)
+    segment.tag = "slow_to_airdrop"
+    segment.analyses.extend( analyses.airdrop )
+    segment.altitude                                                = 10000   * Units.feet
+    segment.air_speed_start                                         = 148.5 * Units['m/s']   # 250 KCAS
+    segment.air_speed_end                                           = 89.5  * Units['m/s']   # 150 KCAS
+    segment.acceleration                                            = -0.5  * Units['m/s/s']
+
+    segment.flight_dynamics.force_x                                 = True
+    segment.flight_dynamics.force_z                                 = True
+
+    segment.assigned_control_variables.throttle.active              = True
+    segment.assigned_control_variables.throttle.assigned_propulsors = [['starboard_propulsor_1', 'starboard_propulsor_2','port_propulsor_1', 'port_propulsor_2']]
+    segment.assigned_control_variables.body_angle.active            = True
+
+    mission.append_segment(segment)
+
+    #third cruise, airdrop run
     segment = Segments.Cruise.Constant_Speed_Constant_Altitude(base_segment)
     segment.tag = "cruise_3"
-    segment.analyses.extend( analyses.cruise )
+    segment.analyses.extend( analyses.airdrop )
     segment.altitude                                                = 10000   * Units.feet
-    segment.air_speed                                               = 160 * Units['mph']
+    segment.air_speed                                               = 89.5 * Units['m/s']    # 150 KCAS [uncertain]
     segment.distance                                                = 50 * Units.nmi
-    
+
     segment.flight_dynamics.force_x                                 = True
     segment.flight_dynamics.force_z                                 = True
-    
+
     segment.assigned_control_variables.throttle.active              = True
     segment.assigned_control_variables.throttle.assigned_propulsors = [['starboard_propulsor_1', 'starboard_propulsor_2','port_propulsor_1', 'port_propulsor_2']]
     segment.assigned_control_variables.body_angle.active            = True
-    
+
     mission.append_segment(segment)
-    
-    #third climb
-    segment = Segments.Climb.Constant_Speed_Constant_Rate(base_segment)
+
+    #third climb, payload has been dropped
+    segment = Segments.Climb.Constant_CAS_Constant_Rate(base_segment)
     segment.tag = "climb_3"
-    segment.analyses.extend( analyses.takeoff )
+    segment.analyses.extend( analyses.cruise )
     segment.altitude_start                                          = 10000   * Units.feet
+    segment.altitude_end                                            = 25000   * Units.feet
+    segment.calibrated_air_speed                                    = 310.0 * Units.knots
+    segment.climb_rate                                              = 9.0   * Units['m/s']
+    segment.payload_drop_mass                                       = analyses.cruise.weights.vehicle.mass_properties.cargo
+    segment.process.iterate.initials.weights                        = drop_payload_then_initialize_weights
+
+    segment.flight_dynamics.force_x                                 = True
+    segment.flight_dynamics.force_z                                 = True
+
+    segment.assigned_control_variables.throttle.active              = True
+    segment.assigned_control_variables.throttle.assigned_propulsors = [['starboard_propulsor_1', 'starboard_propulsor_2','port_propulsor_1', 'port_propulsor_2']]
+    segment.assigned_control_variables.body_angle.active            = True
+
+    mission.append_segment(segment)
+
+    #third climb continued at Mach 0.74 to cruise altitude
+    segment = Segments.Climb.Constant_Mach_Constant_Rate(base_segment)
+    segment.tag = "climb_3b"
+    segment.analyses.extend( analyses.cruise )
+    segment.altitude_start                                          = 25000   * Units.feet
     segment.altitude_end                                            = 28000   * Units.feet
-    segment.air_speed                                               = 400 * Units['mph']
+    segment.mach_number                                             = 0.74
     segment.climb_rate                                              = 9.0   * Units['m/s']
 
     segment.flight_dynamics.force_x                                 = True
@@ -1017,7 +1157,7 @@ def mission_setup(analyses):
     segment.assigned_control_variables.body_angle.active            = True
 
     mission.append_segment(segment)
-    
+
     #fourth cruise after ascent
     segment = Segments.Cruise.Constant_Mach_Constant_Altitude(base_segment)
     segment.tag = "cruise_4"
@@ -1025,41 +1165,97 @@ def mission_setup(analyses):
     segment.altitude                                                = 28000   * Units.feet
     segment.mach_number                                             = 0.76
     segment.distance                                                = 500 * Units.nmi
-    
+
     segment.flight_dynamics.force_x                                 = True
     segment.flight_dynamics.force_z                                 = True
-    
+
     segment.assigned_control_variables.throttle.active              = True
     segment.assigned_control_variables.throttle.assigned_propulsors = [['starboard_propulsor_1', 'starboard_propulsor_2','port_propulsor_1', 'port_propulsor_2']]
     segment.assigned_control_variables.body_angle.active            = True
-    
+
     mission.append_segment(segment)
-    
-    #descent after cruising to land
+
+    #descent at Mach 0.74 down to the crossover altitude
+    # (Descent.Linear_Mach_Constant_Rate evaluates the speed of sound before setting altitude in RCAIDE 1.2.1, so it
+    #  flies Mach 0.74 * sea-level a = Mach 0.82 up here; use the equivalent true airspeed instead: M 0.735-0.745)
     segment = Segments.Descent.Constant_Speed_Constant_Rate(base_segment)
     segment.tag = "descent_2"
     segment.analyses.extend( analyses.cruise )
     segment.altitude_start                                          = 28000   * Units.feet
-    segment.altitude_end                                            = 0   * Units.feet
-    segment.air_speed                                               = 400 * Units['mph']
+    segment.altitude_end                                            = 25000   * Units.feet
+    segment.air_speed                                               = 227.8 * Units['m/s']   # Mach 0.74 at 26,500 ft
     segment.descent_rate                                            = 3.5   * Units['m/s']
-    
+
     segment.flight_dynamics.force_x                                 = True
     segment.flight_dynamics.force_z                                 = True
-    
+
     segment.assigned_control_variables.throttle.active              = True
     segment.assigned_control_variables.throttle.assigned_propulsors = [['starboard_propulsor_1', 'starboard_propulsor_2','port_propulsor_1', 'port_propulsor_2']]
     segment.assigned_control_variables.body_angle.active            = True
-    
+
     mission.append_segment(segment)
-    
+
+    #descent at 310 KCAS to 10000 feet
+    segment = Segments.Descent.Constant_CAS_Constant_Rate(base_segment)
+    segment.tag = "descent_2b"
+    segment.analyses.extend( analyses.cruise )
+    segment.altitude_start                                          = 25000   * Units.feet
+    segment.altitude_end                                            = 10000   * Units.feet
+    segment.calibrated_air_speed                                    = 310 * Units.knots
+    segment.descent_rate                                            = 3.5   * Units['m/s']
+
+    segment.flight_dynamics.force_x                                 = True
+    segment.flight_dynamics.force_z                                 = True
+
+    segment.assigned_control_variables.throttle.active              = True
+    segment.assigned_control_variables.throttle.assigned_propulsors = [['starboard_propulsor_1', 'starboard_propulsor_2','port_propulsor_1', 'port_propulsor_2']]
+    segment.assigned_control_variables.body_angle.active            = True
+
+    mission.append_segment(segment)
+
+    #descent at 250 KCAS below 10000 feet to the approach
+    segment = Segments.Descent.Constant_CAS_Constant_Rate(base_segment)
+    segment.tag = "descent_3"
+    segment.analyses.extend( analyses.cruise )
+    segment.altitude_start                                          = 10000   * Units.feet
+    segment.altitude_end                                            = 1500   * Units.feet
+    segment.calibrated_air_speed                                    = 250 * Units.knots
+    segment.descent_rate                                            = 3.5   * Units['m/s']
+
+    segment.flight_dynamics.force_x                                 = True
+    segment.flight_dynamics.force_z                                 = True
+
+    segment.assigned_control_variables.throttle.active              = True
+    segment.assigned_control_variables.throttle.assigned_propulsors = [['starboard_propulsor_1', 'starboard_propulsor_2','port_propulsor_1', 'port_propulsor_2']]
+    segment.assigned_control_variables.body_angle.active            = True
+
+    mission.append_segment(segment)
+
+    #final approach, landing flaps, 3 deg glide path (130 kt * sin(3 deg) = 3.5 m/s)
+    segment = Segments.Descent.Constant_CAS_Constant_Rate(base_segment)
+    segment.tag = "approach"
+    segment.analyses.extend( analyses.landing )
+    segment.altitude_start                                          = 1500   * Units.feet
+    segment.altitude_end                                            = 0   * Units.feet
+    segment.calibrated_air_speed                                    = 130 * Units.knots     # [uncertain]
+    segment.descent_rate                                            = 3.5   * Units['m/s']
+
+    segment.flight_dynamics.force_x                                 = True
+    segment.flight_dynamics.force_z                                 = True
+
+    segment.assigned_control_variables.throttle.active              = True
+    segment.assigned_control_variables.throttle.assigned_propulsors = [['starboard_propulsor_1', 'starboard_propulsor_2','port_propulsor_1', 'port_propulsor_2']]
+    segment.assigned_control_variables.body_angle.active            = True
+
+    mission.append_segment(segment)
+
     #land
-    
+
     segment = Segments.Ground.Landing(base_segment)
     segment.tag = "landing"
 
     segment.analyses.extend( analyses.reverse_thrust )
-    segment.velocity_start                                          = 400 * Units['mph']
+    segment.velocity_start                                          = 130 * Units.knots     # touchdown [uncertain]
     segment.velocity_end                                            = 10 * Units.knots
     segment.friction_coefficient                                    = 0.4
     segment.altitude                                                = 0.0
@@ -1067,7 +1263,7 @@ def mission_setup(analyses):
     #segment.assigned_control_variables.elapsed_time.initial_guess_values  = [[60.]]
     mission.append_segment(segment)
 
-    return mission 
+    return mission
 
 def missions_setup(mission): 
  
@@ -1079,29 +1275,31 @@ def missions_setup(mission):
  
     return missions 
 
-def plot_mission(results):  
-    
+def plot_mission(results):
+
+    # every run saves (and overwrites) the PNGs in this folder
+    plot_dir = 'C-17 Plots/'
+
     # Plot Flight Conditions
-    plot_flight_conditions(results)
+    plot_flight_conditions(results, save_figure = True, save_filename = plot_dir + 'Flight_Conditions')
 
     # Plot Aerodynamic Forces
-    plot_aerodynamic_forces(results)
+    plot_aerodynamic_forces(results, save_figure = True, save_filename = plot_dir + 'Aerodynamic_Forces')
 
     # Plot Aerodynamic Coefficients
-    plot_aerodynamic_coefficients(results)
+    plot_aerodynamic_coefficients(results, save_figure = True, save_filename = plot_dir + 'Aerodynamic_Coefficients')
 
     # Drag Components
-    plot_drag_components(results)
+    plot_drag_components(results, save_figure = True, save_filename = plot_dir + 'Drag_Components')
 
     # Plot Altitude, sfc, vehicle weight
-    plot_altitude_sfc_weight(results)
+    plot_altitude_sfc_weight(results, save_figure = True, save_filename = plot_dir + 'Weight_and_Fuel_Consumption')
 
     # Plot Velocities
-    plot_aircraft_velocities(results)
+    plot_aircraft_velocities(results, save_figure = True, save_filename = plot_dir + 'Aircraft_Speeds')
     plt.show()
     #find the rcaide outputs needed for you
     
     return 
-
 
 main()

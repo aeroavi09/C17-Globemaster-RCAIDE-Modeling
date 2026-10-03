@@ -1,0 +1,4 @@
+# local backup of the pre-debug script (the same code is in git history)
+C17_Globemaster_III_ORIGINAL.py
+__pycache__/
+*.pyc
