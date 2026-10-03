@@ -87,6 +87,18 @@ Cruise_4 L/D went from 2.70 to 13.52. TSFC was about 0.60 lb/lbf/h throughout, w
   - `Descent.Constant_CAS_Constant_Rate` declares `calibrated_airspeed`, but its solver reads `calibrated_air_speed`. The script sets the latter.
   - `Descent.Linear_Mach_Constant_Rate` evaluates the speed of sound before setting altitude, so it flies Mach 0.74 x sea-level a = **Mach 0.82** at altitude. The script uses a constant-TAS descent instead (227.8 m/s, Mach 0.735-0.745).
 
+### F7: fuselage effective diameter was entered as a radius
+- **Cause:** `fuselage.effective_diameter = 10.794 ft`, commented "this becomes radius_outer". RCAIDE uses it as a **diameter**: d/L in the fuselage form factor, and `radius_outer = effective_diameter / 2` in the moment of inertia.
+- **Fix:** **24.74 ft** = (max section height 20.592 + width 28.886)/2. That's how RCAIDE's own OpenVSP importer defines it (`vsp_fuselage.py`). The C17 Manual's 22.5 ft round-body figure excludes the landing-gear sponsons.
+- **Effect:** fuselage CDp 0.00405 to 0.00456 (+13%), total cruise CD +1.5%, **cruise_1 L/D 13.91 to 13.68**, cruise_4 13.52 to 13.26, fuel burned 51.7 to 52.5 t.
+
+### Plot layout
+`tidy_and_save_figure()` post-processes RCAIDE's figures before saving. The library is unchanged.
+- **Legend:** moved beside the plots instead of over them.
+- **Axis limits:** every axis rescales to show all its data. RCAIDE hard-codes AoA -5..15 deg and CD 0..0.1, which hid cruise AoA and the airdrop/approach drag.
+- **Duplicates:** control-surface names no longer repeat in the segment legend.
+- **Size:** 16x9 in, saved at 150 dpi.
+
 ## Acceptance criteria
 
 - [x] **Cruise L/D 12-18:** cruise_1 13.91, cruise_4 13.52. Climb and descent legs are 11.1-15.5.

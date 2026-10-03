@@ -405,7 +405,7 @@ def vehicle_setup():
     fuselage.fineness.tail                                  = 21.008/69.498
     fuselage.heights.maximum                                = 10.296*2 * Units.feet
     fuselage.width                                          = 28.886 * Units.feet
-    fuselage.effective_diameter                             = 10.794 * Units.feet   # this becomes radius_outer
+    fuselage.effective_diameter                             = 24.74 * Units.feet   # (max section height + width)/2, as RCAIDE's OpenVSP import defines it; a diameter, not a radius
     fuselage.areas.wetted                                   = 8972 * Units.feet**2  # integrated from the segment cross-sections below (was 20000, ~2.2x too high)
     fuselage.heights.at_quarter_length                      = 8.3655 * Units.meter
     fuselage.heights.at_three_quarters_length               = 10.296 * Units.meter
@@ -1275,28 +1275,65 @@ def missions_setup(mission):
  
     return missions 
 
+def tidy_and_save_figure(fig, filename, legend_title = 'Flight Segment'):
+    """Move RCAIDE's segment legend beside the plots, rescale every axis to show all of its data, and save"""
+    fig.set_size_inches(16, 9)
+
+    # labels that already have their own legend inside a plot (e.g. control surfaces) are left out of the side legend
+    axis_labels = set()
+    for axis in fig.axes:
+        if axis.get_legend() is not None:
+            axis_labels.update(text.get_text() for text in axis.get_legend().get_texts())
+
+    # RCAIDE puts the segment legend across the top of the figure, over the top row of plots
+    for leg in list(fig.legends):
+        entries = [(handle, text.get_text()) for handle, text in zip(leg.legend_handles, leg.get_texts())
+                   if text.get_text() not in axis_labels]
+        leg.remove()
+        fig.legend([e[0] for e in entries], [e[1] for e in entries], title = legend_title,
+                   loc = 'center left', bbox_to_anchor = (0.81, 0.5), ncol = 1)
+
+    # some RCAIDE plots hard-code limits (AoA -5..15 deg, CD 0..0.1) that cut off data
+    for axis in fig.axes:
+        axis.margins(y = 0.08)
+        axis.relim()
+        axis.autoscale(enable = True)
+        if axis.get_legend() is not None:
+            axis.get_legend().set_loc('best')
+            axis.get_legend().get_frame().set_alpha(0.85)
+
+    fig.tight_layout(rect = (0, 0, 0.80, 0.96))
+    fig.savefig(filename + '.png', dpi = 150)
+    return
+
 def plot_mission(results):
 
     # every run saves (and overwrites) the PNGs in this folder
     plot_dir = 'C-17 Plots/'
 
     # Plot Flight Conditions
-    plot_flight_conditions(results, save_figure = True, save_filename = plot_dir + 'Flight_Conditions')
+    fig = plot_flight_conditions(results)
+    tidy_and_save_figure(fig, plot_dir + 'Flight_Conditions')
 
     # Plot Aerodynamic Forces
-    plot_aerodynamic_forces(results, save_figure = True, save_filename = plot_dir + 'Aerodynamic_Forces')
+    fig = plot_aerodynamic_forces(results)
+    tidy_and_save_figure(fig, plot_dir + 'Aerodynamic_Forces')
 
     # Plot Aerodynamic Coefficients
-    plot_aerodynamic_coefficients(results, save_figure = True, save_filename = plot_dir + 'Aerodynamic_Coefficients')
+    fig = plot_aerodynamic_coefficients(results)
+    tidy_and_save_figure(fig, plot_dir + 'Aerodynamic_Coefficients')
 
     # Drag Components
-    plot_drag_components(results, save_figure = True, save_filename = plot_dir + 'Drag_Components')
+    fig = plot_drag_components(results)
+    tidy_and_save_figure(fig, plot_dir + 'Drag_Components', legend_title = 'Drag Component')
 
     # Plot Altitude, sfc, vehicle weight
-    plot_altitude_sfc_weight(results, save_figure = True, save_filename = plot_dir + 'Weight_and_Fuel_Consumption')
+    fig = plot_altitude_sfc_weight(results)
+    tidy_and_save_figure(fig, plot_dir + 'Weight_and_Fuel_Consumption')
 
     # Plot Velocities
-    plot_aircraft_velocities(results, save_figure = True, save_filename = plot_dir + 'Aircraft_Speeds')
+    fig = plot_aircraft_velocities(results)
+    tidy_and_save_figure(fig, plot_dir + 'Aircraft_Speeds')
     plt.show()
     #find the rcaide outputs needed for you
     
